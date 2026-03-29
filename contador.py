@@ -239,8 +239,8 @@ def trabalhador_ia():
                     "widget": None # Placeholder para o elemento de UI que será criado depois
                 }
                 
-        except Exception:
-            # Falha ao achar o rosto (Ex: a pessoa virou a cara na hora da foto). Volta para tentar tirar outra.
+        except Exception as e:
+            print(f"🚨 ERRO NA IA DE BIOMETRIA: {e}") # <-- ADICIONÁMOS ESTE PRINT
             estado_rostos[track_id]["estado"] = "aguardando"
             
         fila_fotos_ia.task_done() # Avisa à fila que o trabalho terminou

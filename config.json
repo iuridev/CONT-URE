@@ -1,0 +1,4 @@
+{
+    "DATABASE_URI": "sqlite:///controle_acesso.db",
+    "CAMERA_ID": 0
+}

@@ -18,3 +18,10 @@ runs/
 .venv/
 
 *.db
+
+# =========================
+# COMPILAÇÃO (PyInstaller)
+# =========================
+build/
+dist/
+*.spec
