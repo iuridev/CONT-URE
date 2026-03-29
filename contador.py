@@ -71,10 +71,9 @@ def registrar_visita_hoje(conn, pessoa_id):
     if not cursor.fetchone():
         cursor.execute("INSERT INTO visitas (pessoa_id, data_visita, hora_visita) VALUES (?, ?, ?)", (pessoa_id, hoje, agora))
         conn.commit()
-        return True # Retorna True se for uma visita nova hoje
-    return False # Retorna False se a pessoa já tinha entrado hoje
+        return True
+    return False
 
-# NOVO: Função para contar quantos visitantes únicos tivemos hoje
 def contar_visitantes_hoje(conn):
     hoje = date.today().isoformat()
     cursor = conn.cursor()
@@ -157,13 +156,16 @@ thread_ia.start()
 print("A ligar ao banco de dados...")
 conexao_db = iniciar_banco()
 memoria_pessoas = carregar_todas_pessoas(conexao_db)
-
-# NOVO: Puxa do banco de dados o valor inicial ao ligar o sistema
 total_visitantes_hoje = contar_visitantes_hoje(conexao_db) 
 
 print("A iniciar sistema Free Flow...")
 model = YOLO('yolov8n.pt')
 cap = cv2.VideoCapture(0)
+
+# NOVO: Forçando Tela Cheia (Fullscreen)
+nome_janela = "Sistema de Acesso Livre"
+cv2.namedWindow(nome_janela, cv2.WINDOW_NORMAL)
+cv2.setWindowProperty(nome_janela, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
 estado_rostos = {} 
 mapa_dados_tela = {} 
@@ -198,7 +200,6 @@ while cap.isOpened():
                 if not estado_rostos[track_id]["visita_registada"]:
                     db_id = estado_rostos[track_id]["db_id"]
                     
-                    # NOVO: Se for a primeira vez que a pessoa entra hoje, aumenta o contador
                     nova_visita = registrar_visita_hoje(conexao_db, db_id)
                     if nova_visita:
                         total_visitantes_hoje += 1
@@ -209,7 +210,7 @@ while cap.isOpened():
 
             elif estado_atual == "desconhecido":
                 cv2.putText(frame, "A ABRIR REGISTO...", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-                cv2.imshow("Sistema de Acesso Livre", frame) 
+                cv2.imshow(nome_janela, frame) 
                 cv2.waitKey(1) 
                 
                 assinatura_final = estado_rostos[track_id]["assinatura"]
@@ -218,10 +219,7 @@ while cap.isOpened():
                 if assinatura_final is not None:
                     novo_id = salvar_nova_pessoa(conexao_db, assinatura_final, nome_digitado, doc_digitado)
                     registrar_visita_hoje(conexao_db, novo_id)
-                    
-                    # NOVO: Sendo uma pessoa nova acabada de registar, conta como visita
                     total_visitantes_hoje += 1
-                    
                     memoria_pessoas.append((novo_id, nome_digitado, assinatura_final))
                     
                     estado_rostos[track_id]["estado"] = "reconhecido"
@@ -243,10 +241,10 @@ while cap.isOpened():
             else:
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-    # NOVO: Desenha o contador de visitantes únicos no canto superior esquerdo do vídeo
     cv2.putText(frame, f"Visitantes Hoje: {total_visitantes_hoje}", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
-    cv2.imshow("Sistema de Acesso Livre", frame)
+    # NOVO: Usa o nome da variável para garantir a tela cheia
+    cv2.imshow(nome_janela, frame)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
