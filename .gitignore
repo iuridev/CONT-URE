@@ -14,3 +14,7 @@ runs/
 *.mp4
 *.avi
 *.jpg
+
+.venv/
+
+*.db
