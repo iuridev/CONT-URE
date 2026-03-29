@@ -1,0 +1,16 @@
+# Ambientes virtuais
+venv/
+env/
+
+# Arquivos compilados do Python
+__pycache__/
+*.pyc
+
+# Pesos do modelo YOLO e arquivos gerados
+*.pt
+runs/
+
+# Vídeos e imagens de teste
+*.mp4
+*.avi
+*.jpg
