@@ -6,7 +6,7 @@ import os
 import sqlite3
 import json
 from datetime import date, datetime
-import tkinter as tk # NOVO: Biblioteca para criar janelas visuais
+import tkinter as tk
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
@@ -14,16 +14,13 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 # 1. FUNÇÃO DA JANELA POP-UP (INTERFACE VISUAL)
 # ==========================================
 def solicitar_cadastro_gui():
-    """Abre uma janela para digitar os dados do novo visitante"""
     janela = tk.Tk()
-    janela.title("Novo Visitante Detectado!")
+    janela.title("Novo Visitante Detetado!")
     janela.geometry("350x250")
-    
-    # Faz a janela saltar para frente da câmera
     janela.attributes('-topmost', True) 
     janela.focus_force()
 
-    tk.Label(janela, text="Pessoa não reconhecida.", fg="red", font=("Arial", 10, "bold")).pack(pady=10)
+    tk.Label(janela, text="Pessoa não reconhecida no radar.", fg="red", font=("Arial", 10, "bold")).pack(pady=10)
     
     tk.Label(janela, text="Nome Completo:").pack()
     entrada_nome = tk.Entry(janela, width=30)
@@ -36,24 +33,20 @@ def solicitar_cadastro_gui():
     dados_digitados = {"nome": "Desconhecido", "documento": "Não informado"}
     
     def salvar_e_fechar():
-        # Pega o que foi digitado (ou deixa 'Desconhecido' se ficar em branco)
         dados_digitados["nome"] = entrada_nome.get().strip() or "Desconhecido"
         dados_digitados["documento"] = entrada_doc.get().strip() or "Não informado"
-        janela.destroy() # Fecha a janela
+        janela.destroy() 
         
-    tk.Button(janela, text="Cadastrar e Liberar Catraca", command=salvar_e_fechar, bg="green", fg="white").pack(pady=20)
-    
-    # Trava a execução do Python aqui até a pessoa clicar em salvar
+    tk.Button(janela, text="Registar e Liberar Acesso", command=salvar_e_fechar, bg="green", fg="white").pack(pady=20)
     janela.wait_window() 
     return dados_digitados["nome"], dados_digitados["documento"]
 
 # ==========================================
-# 2. BANCO DE DADOS ATUALIZADO
+# 2. BANCO DE DADOS
 # ==========================================
 def iniciar_banco():
     conn = sqlite3.connect('visitantes.db')
     cursor = conn.cursor()
-    # Adicionamos as colunas NOME e DOCUMENTO
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS visitantes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,15 +63,13 @@ def iniciar_banco():
 def carregar_memoria_de_hoje(conn):
     hoje = date.today().isoformat()
     cursor = conn.cursor()
-    # Agora puxamos o NOME também
     cursor.execute("SELECT id, nome, assinatura_facial FROM visitantes WHERE data_visita = ?", (hoje,))
     linhas = cursor.fetchall()
     
     memoria = []
     for linha in linhas:
-        db_id = linha[0]
-        nome = linha[1]
-        vetor = json.loads(linha[2]) 
+        db_id, nome, vetor_json = linha[0], linha[1], linha[2]
+        vetor = json.loads(vetor_json) 
         memoria.append((db_id, nome, vetor))
     return memoria
 
@@ -94,22 +85,27 @@ def salvar_novo_visitante(conn, vetor_facial, nome, documento):
     return cursor.lastrowid
 
 # ==========================================
-# 3. INICIALIZAÇÃO DO SISTEMA PRINCIPAL
+# 3. INICIALIZAÇÃO DO SISTEMA
 # ==========================================
 print("Conectando ao banco de dados...")
 conexao_db = iniciar_banco()
 memoria_hoje = carregar_memoria_de_hoje(conexao_db)
 
-print("Iniciando câmeras e IA...")
+print("Iniciando câmaras e IA...")
 model = YOLO('yolov8n.pt')
 cap = cv2.VideoCapture(0)
 
-linha_y = 300 
-limiar_reconhecimento = 0.55 #tolerancia de aparencia
-rastreio_posicoes = {} 
+# --- CONFIGURAÇÃO DA ZONA DE RADAR ---
+linha_radar_y = 150    # Linha Amarela (Início das tentativas)
+linha_catraca_y = 350  # Linha Azul (Ponto de decisão final)
+limiar_reconhecimento = 0.55 
 
-# Dicionário que liga o YOLO diretamente ao NOME da pessoa
+rastreio_posicoes = {} 
 mapa_id_yolo_para_dados = {} 
+
+# Memória de curto prazo para quem está a caminhar dentro do radar
+# Formato: { track_id: {"reconhecido": True/False, "nome": "...", "assinatura": [...]} }
+cache_radar = {} 
 
 while cap.isOpened():
     sucesso, frame = cap.read()
@@ -125,89 +121,106 @@ while cap.isOpened():
         for box, track_id in zip(boxes, track_ids):
             x1, y1, x2, y2 = map(int, box)
             cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
+            
+            cy_anterior = rastreio_posicoes.get(track_id, cy)
 
-            if track_id in rastreio_posicoes:
-                cy_anterior = rastreio_posicoes[track_id]
+            # ==========================================
+            # FASE 1: DENTRO DA ZONA DE RADAR (TENTATIVAS)
+            # ==========================================
+            if linha_radar_y < cy < linha_catraca_y:
                 
-                # Se a pessoa cruzar a linha
-                if cy_anterior < linha_y and cy >= linha_y:
+                # Regista a pessoa no radar se acabou de entrar
+                if track_id not in cache_radar:
+                    cache_radar[track_id] = {"reconhecido": False, "nome": "", "assinatura": None, "tentativas": 0}
+                
+                # Se ainda não foi reconhecida, a IA tenta ler o rosto
+                if not cache_radar[track_id]["reconhecido"]:
+                    cache_radar[track_id]["tentativas"] += 1
                     
                     margem = 15
-                    recorte_pessoa = frame[max(0, y1-margem):min(frame.shape[0], y2+margem), 
-                                           max(0, x1-margem):min(frame.shape[1], x2+margem)]
-
-                    if recorte_pessoa.size > 0:
+                    recorte = frame[max(0, y1-margem):min(frame.shape[0], y2+margem), max(0, x1-margem):min(frame.shape[1], x2+margem)]
+                    
+                    if recorte.size > 0:
                         try:
-                            # 1. Extrai a biometria
-                            embedded = DeepFace.represent(img_path = recorte_pessoa, 
-                                                         model_name = 'Facenet', 
-                                                         enforce_detection = True, 
-                                                         detector_backend = 'mtcnn',
-                                                         align = True)
-                            
+                            # Tenta extrair a biometria
+                            embedded = DeepFace.represent(img_path = recorte, model_name = 'Facenet', 
+                                                         enforce_detection = True, detector_backend = 'mtcnn', align = True)
                             nova_assinatura = embedded[0]["embedding"]
-                            eh_pessoa_nova = True
-                            nome_reconhecido = ""
-                            menor_distancia_encontrada = 1.0 #  : Para rastrearmos a nota da IA
+                            cache_radar[track_id]["assinatura"] = nova_assinatura # Guarda a melhor foto tirada
                             
-                            # 2. Procura no banco de dados de hoje
+                            # Procura no banco de dados
                             for db_id, nome_banco, assinatura_salva in memoria_hoje:
-                                a = np.array(nova_assinatura)
-                                b = np.array(assinatura_salva)
+                                a, b = np.array(nova_assinatura), np.array(assinatura_salva)
                                 distancia = 1 - (np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
-                                # Salva a menor distância calculada para fins de debug
-                                if distancia < menor_distancia_encontrada:
-                                    menor_distancia_encontrada = distancia
-
-
                                 if distancia < limiar_reconhecimento:
-                                    eh_pessoa_nova = False
-                                    nome_reconhecido = nome_banco
-                                    print(f"-> Visitante: {nome_reconhecido} (Já cadastrado)")
+                                    # SUCESSO! Reconheceu a pessoa no meio do caminho.
+                                    cache_radar[track_id]["reconhecido"] = True
+                                    cache_radar[track_id]["nome"] = nome_banco
+                                    mapa_id_yolo_para_dados[track_id] = nome_banco
+                                    print(f"[RADAR] Rosto de {nome_banco} identificado antecipadamente! (Tentativa {cache_radar[track_id]['tentativas']})")
                                     break
+                        except Exception:
+                            # Rosto não estava bom neste frame. Não faz mal, tenta de novo no próximo!
+                            pass
+
+            # ==========================================
+            # FASE 2: CRUZOU A CATRACA (DECISÃO FINAL)
+            # ==========================================
+            if cy_anterior < linha_catraca_y and cy >= linha_catraca_y:
+                
+                # A pessoa passou pelo radar, vamos ver o veredicto
+                if track_id in cache_radar:
+                    
+                    if cache_radar[track_id]["reconhecido"]:
+                        print(f"-> ACESSO LIVRE: {cache_radar[track_id]['nome']} (Validado no Radar)")
+                    else:
+                        print(f"*** RADAR FALHOU APÓS {cache_radar[track_id]['tentativas']} TENTATIVAS. ABRIR REGISTO. ***")
+                        
+                        # Usa a última foto tentada no radar (se houver) ou tenta uma nova agora
+                        assinatura_final = cache_radar[track_id]["assinatura"]
+                        
+                        if assinatura_final is None:
+                            # Se passou pelo radar inteiro de costas, força uma última extração (pode falhar)
+                            print("Aviso: Nenhum rosto captado no radar.")
+                            # Aqui poderíamos forçar o utilizador a voltar, mas para a PoC vamos deixar passar
+                        
+                        # Abre a Janela
+                        nome_digitado, doc_digitado = solicitar_cadastro_gui()
+                        
+                        if assinatura_final is not None:
+                            id_gerado = salvar_novo_visitante(conexao_db, assinatura_final, nome_digitado, doc_digitado)
+                            memoria_hoje.append((id_gerado, nome_digitado, assinatura_final))
                             
-                            # 3. SE FOR ALGUÉM NOVO, ABRE A TELA DE CADASTRO
-                            if eh_pessoa_nova:
-                                # AGORA A IA NOS DIZ O MOTIVO DA RECUSA:
-                                print(f"*** RECUSADO! Menor distância no banco: {menor_distancia_encontrada:.2f} (Limite é {limiar_reconhecimento}) ***")
-                                
-                                # Pausa o vídeo e chama a janelinha
-                                nome_digitado, doc_digitado = solicitar_cadastro_gui()
-                                
-                                # Salva no banco com os dados novos
-                                id_gerado = salvar_novo_visitante(conexao_db, nova_assinatura, nome_digitado, doc_digitado)
-                                
-                                # Adiciona na memória para ele não perguntar de novo
-                                nome_reconhecido = nome_digitado
-                                memoria_hoje.append((id_gerado, nome_reconhecido, nova_assinatura))
-                                print(f"*** {nome_reconhecido} cadastrado com sucesso! ***")
-                            
-                            # 4. Associa o nome à caixinha verde da tela
-                            mapa_id_yolo_para_dados[track_id] = nome_reconhecido
-                                
-                        except Exception as e:
-                            print(f"Rosto não nítido. Passe novamente.")
+                        mapa_id_yolo_para_dados[track_id] = nome_digitado
+                        print(f"*** {nome_digitado} registado com sucesso! ***")
+                        
+                else:
+                    print("Erro: Pessoa 'teletransportou-se' para cima da catraca sem passar pelo radar.")
 
             rastreio_posicoes[track_id] = cy
             
             # --- VISUALIZAÇÃO ---
-            # Se temos o nome da pessoa, desenhamos a caixa em AMARELO
             if track_id in mapa_id_yolo_para_dados:
-                texto_tela = mapa_id_yolo_para_dados[track_id] # Coloca o nome digitado!
-                cor = (0, 255, 255)
-            # Se ele ainda não cruzou a linha, deixamos em VERDE com ID genérico
+                texto = mapa_id_yolo_para_dados[track_id]
+                cor = (0, 255, 255) # Amarelo (Reconhecido)
+            elif track_id in cache_radar and not cache_radar[track_id]["reconhecido"]:
+                texto = f"A analisar... ({cache_radar[track_id]['tentativas']})"
+                cor = (0, 165, 255) # Laranja (A tentar ler o rosto)
             else:
-                texto_tela = f"Aguardando passagem..."
-                cor = (0, 255, 0)
+                texto = "YOLO Acompanhando"
+                cor = (0, 255, 0) # Verde
                 
             cv2.rectangle(frame, (x1, y1), (x2, y2), cor, 2)
-            cv2.putText(frame, texto_tela, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cor, 2)
+            cv2.putText(frame, texto, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, cor, 2)
 
-    cv2.line(frame, (0, linha_y), (frame.shape[1], linha_y), (255, 0, 0), 2)
-    cv2.putText(frame, f"Cadastrados Hoje: {len(memoria_hoje)}", (30, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+    # Desenha as linhas do Radar na tela
+    cv2.line(frame, (0, linha_radar_y), (frame.shape[1], linha_radar_y), (0, 255, 255), 2) # Amarelo: Entrada
+    cv2.line(frame, (0, linha_catraca_y), (frame.shape[1], linha_catraca_y), (255, 0, 0), 2) # Azul: Catraca final
+    
+    cv2.putText(frame, f"Registados Hoje: {len(memoria_hoje)}", (30, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
 
-    cv2.imshow("Sistema de Controle de Acesso", frame)
+    cv2.imshow("Sistema de Acesso com Radar Híbrido", frame)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
